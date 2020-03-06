@@ -138,7 +138,7 @@ def main(op):
     if op == 'train':
         train_df = pd.read_csv('../data/train.csv')
         print(train_df['label'].value_counts())
-        train_df['filename'] = train_df['filename'].apply(lambda x: '../data/train/{0}'.format(x) + '.jpg')
+        train_df['filename'] = train_df['filename'].apply(lambda x: '../data/train/{0}'.format(x))
         if mode == 1:
             train_data, val_data = train_test_split(train_df, shuffle=True, test_size=0.1)
             print('train:{}, val:{}'.format(train_data.shape[0], val_data.shape[0]))
