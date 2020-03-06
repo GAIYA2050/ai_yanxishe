@@ -18,9 +18,8 @@ train_path = os.path.join(data_path, 'train.csv')
 test_path = os.path.join(data_path, 'test.csv')
 
 num_classes = 3
-# img_size = 224
-img_size = 299
+img_size = 224
 batch_size = 32
 epochs_num = 8
-train_print_step = 50
+train_print_step = 20
 patience_epoch = 4
