@@ -56,7 +56,7 @@ def train(train_data, val_data, fold_idx=None):
     # criterion = FocalLoss(0.5)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     # optimizer = torch.optim.Adagrad(model.parameters(), lr=1e-3)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=8, gamma=0.1)
     # config.model_save_path = os.path.join(config.model_path, '{}.bin'.format(model_name))
 
     best_val_acc = 0
@@ -160,7 +160,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-o", "--operation", default='train', type=str, help="operation")
     parser.add_argument("-b", "--batch_size", default=64, type=int, help="batch size")
-    parser.add_argument("-e", "--epochs_num", default=16, type=int, help="train epochs")
+    parser.add_argument("-e", "--epochs_num", default=64, type=int, help="train epochs")
     parser.add_argument("-m", "--model_name", default='resnet', type=str, help="model select")
     parser.add_argument("-mode", "--mode", default=1, type=int, help="train mode")
     args = parser.parse_args()
