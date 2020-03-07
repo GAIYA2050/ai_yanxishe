@@ -70,7 +70,7 @@ def train(train_data, val_data, fold_idx=None):
     for cur_epoch in range(config.epochs_num):
         start_time = int(time.time())
         model.train()
-        print('epoch: ', cur_epoch + 1)
+        print('epoch:{}, step:{}'.format(cur_epoch + 1, len(train_loader)))
         cur_step = 0
         for batch_x, batch_y in train_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)

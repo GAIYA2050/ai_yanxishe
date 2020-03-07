@@ -59,12 +59,16 @@ def train(train_data, val_data, fold_idx=None):
 
     best_val_acc = 0
     last_improved_epoch = 0
+    adjust_lr_num = 0
     if fold_idx is None:
         print('start')
         model_save_path = os.path.join(config.model_path, '{}.bin'.format(model_name))
     else:
         print('start fold: {}'.format(fold_idx + 1))
         model_save_path = os.path.join(config.model_path, '{}_fold{}.bin'.format(model_name, fold_idx))
+    if os.path.isfile(model_save_path):
+        print('加载之前的训练模型')
+        model.load_state_dict(torch.load(model_save_path))
     for cur_epoch in range(config.epochs_num):
         start_time = int(time.time())
         model.train()
@@ -102,10 +106,11 @@ def train(train_data, val_data, fold_idx=None):
         if cur_epoch - last_improved_epoch > config.patience_epoch:
             print("No optimization for a long time, adjust lr...")
             scheduler.step()
-
-        if cur_epoch - last_improved_epoch > config.patience_epoch * config.adjust_lr_num:
-            print("No optimization for a long time, auto stopping...")
-            break
+            last_improved_epoch = cur_epoch
+            adjust_lr_num += 1
+            if adjust_lr_num > config.adjust_lr_num:
+                print("No optimization for a long time, auto stopping...")
+                break
     del model
     gc.collect()
 
@@ -161,7 +166,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-o", "--operation", default='train', type=str, help="operation")
     parser.add_argument("-b", "--batch_size", default=64, type=int, help="batch size")
-    parser.add_argument("-e", "--epochs_num", default=64, type=int, help="train epochs")
+    parser.add_argument("-e", "--epochs_num", default=128, type=int, help="train epochs")
     parser.add_argument("-m", "--model_name", default='resnet', type=str, help="model select")
     parser.add_argument("-mode", "--mode", default=1, type=int, help="train mode")
     args = parser.parse_args()

@@ -22,5 +22,5 @@ img_size = 224
 batch_size = 32
 epochs_num = 8
 train_print_step = 20
-patience_epoch = 9
-adjust_lr_num = 3
+patience_epoch = 8
+adjust_lr_num = 2
