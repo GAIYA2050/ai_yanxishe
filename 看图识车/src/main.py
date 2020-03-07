@@ -55,9 +55,7 @@ def train(train_data, val_data, fold_idx=None):
     criterion = nn.CrossEntropyLoss()
     # criterion = FocalLoss(0.5)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    # optimizer = torch.optim.Adagrad(model.parameters(), lr=1e-3)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=8, gamma=0.1)
-    # config.model_save_path = os.path.join(config.model_path, '{}.bin'.format(model_name))
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.1)
 
     best_val_acc = 0
     last_improved_epoch = 0
@@ -101,9 +99,12 @@ def train(train_data, val_data, fold_idx=None):
         end_time = int(time.time())
         print(msg.format(cur_epoch + 1, config.epochs_num, val_loss, val_acc,
                          end_time - start_time, improved_str))
-        scheduler.step()
         if cur_epoch - last_improved_epoch > config.patience_epoch:
-            print("No optimization for a long time, auto-stopping...")
+            print("No optimization for a long time, adjust lr...")
+            scheduler.step()
+
+        if cur_epoch - last_improved_epoch > config.patience_epoch * config.adjust_lr_num:
+            print("No optimization for a long time, auto stopping...")
             break
     del model
     gc.collect()
