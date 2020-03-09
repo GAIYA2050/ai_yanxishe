@@ -13,3 +13,7 @@
 |resnet+senet+efficientnet|98.5981|2,3,1|
 |resnet+senet+efficientnet+densenet121+inceptionv4|98.5981|3,4,1,1,2|
 |resnet+senet+efficientnet-b4+efficientnet+densenet121+inceptionv4|98.5981|3,3,1,1,1,1|
+
+
+## script
+nohup python main.py -m='resnet' -b=64 -e=16 -mode=2 > nohup/resnet.out 2>&1 &

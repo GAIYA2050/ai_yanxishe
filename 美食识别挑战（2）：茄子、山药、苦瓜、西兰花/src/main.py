@@ -52,21 +52,24 @@ def train(train_data, val_data, fold_idx=None):
     val_loader = DataLoader(val_data, batch_size=config.batch_size, shuffle=False)
 
     model = Net(model_name).to(device)
-    criterion = nn.CrossEntropyLoss()
-    # criterion = FocalLoss(0.5)
+    # criterion = nn.CrossEntropyLoss()
+    criterion = FocalLoss(0.5)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    # optimizer = torch.optim.Adagrad(model.parameters(), lr=1e-3)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
-    # config.model_save_path = os.path.join(config.model_path, '{}.bin'.format(model_name))
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.1)
 
-    best_val_acc = 0
-    last_improved_epoch = 0
     if fold_idx is None:
         print('start')
         model_save_path = os.path.join(config.model_path, '{}.bin'.format(model_name))
     else:
         print('start fold: {}'.format(fold_idx + 1))
         model_save_path = os.path.join(config.model_path, '{}_fold{}.bin'.format(model_name, fold_idx))
+    if os.path.isfile(model_save_path):
+        print('加载之前的训练模型')
+        model.load_state_dict(torch.load(model_save_path))
+
+    best_val_acc = 0
+    last_improved_epoch = 0
+    adjust_lr_num = 0
     for cur_epoch in range(config.epochs_num):
         start_time = int(time.time())
         model.train()
@@ -95,16 +98,18 @@ def train(train_data, val_data, fold_idx=None):
             last_improved_epoch = cur_epoch
         else:
             improved_str = ''
-        # msg = 'the current epoch: {0}/{1}, train loss: {2:>5.2}, train acc: {3:>6.2%},  ' \
-        #       'val loss: {4:>5.2}, val acc: {5:>6.2%}, {6}'
         msg = 'the current epoch: {0}/{1}, val loss: {2:>5.2}, val acc: {3:>6.2%}, cost: {4}s {5}'
         end_time = int(time.time())
         print(msg.format(cur_epoch + 1, config.epochs_num, val_loss, val_acc,
                          end_time - start_time, improved_str))
-        scheduler.step()
         if cur_epoch - last_improved_epoch > config.patience_epoch:
-            print("No optimization for a long time, auto-stopping...")
-            break
+            print("No optimization for a long time, adjust lr...")
+            scheduler.step()
+            last_improved_epoch = cur_epoch  # 加上，不然会连续更新的
+            adjust_lr_num += 1
+            if adjust_lr_num > config.adjust_lr_num:
+                print("No optimization for a long time, auto stopping...")
+                break
     del model
     gc.collect()
 

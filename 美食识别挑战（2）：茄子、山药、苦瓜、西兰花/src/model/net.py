@@ -34,9 +34,7 @@ class Net(nn.Module):
             model.classifier = nn.Linear(1024, config.num_classes)
         elif model_name == 'senet':
             model = se_resnet152(num_classes=config.num_classes)
-        elif model_name == 'efficientnet-b4':
-            model = EfficientNet.from_pretrained('efficientnet-b5', num_classes=config.num_classes)
-        elif model_name == 'efficientnet-b7':
+        elif model_name == 'efficientnet':
             model = EfficientNet.from_pretrained('efficientnet-b7', num_classes=config.num_classes)
 
         self.model = model
