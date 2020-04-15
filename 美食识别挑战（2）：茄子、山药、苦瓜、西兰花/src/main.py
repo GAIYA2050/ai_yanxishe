@@ -145,16 +145,16 @@ def main(op):
         print(train_df['label'].value_counts())
         train_df['filename'] = train_df['filename'].apply(lambda x: '../data/train/{0}'.format(x) + '.jpg')
         if mode == 1:
-            train_data, val_data = train_test_split(train_df, shuffle=True, test_size=0.1)
-            print('train:{}, val:{}'.format(train_data.shape[0], val_data.shape[0]))
-            train(train_data, val_data)
-        else:
             n_splits = 5
             x = train_df['filename'].values
             y = train_df['label'].values
             skf = StratifiedKFold(n_splits=n_splits, random_state=0, shuffle=True)
             for fold_idx, (train_idx, val_idx) in enumerate(skf.split(x, y)):
                 train(train_df.iloc[train_idx], train_df.iloc[val_idx], fold_idx)
+        else:
+            train_data, val_data = train_test_split(train_df, shuffle=True, test_size=0.1)
+            print('train:{}, val:{}'.format(train_data.shape[0], val_data.shape[0]))
+            train(train_data, val_data)
     elif op == 'eval':
         pass
     elif op == 'predict':

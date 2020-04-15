@@ -16,4 +16,4 @@
 
 
 ## script
-nohup python main.py -m='resnet' -b=64 -e=16 -mode=2 > nohup/resnet.out 2>&1 &
+nohup python main.py -m='resnet' -b=64 -e=16 > nohup/resnet.out 2>&1 &

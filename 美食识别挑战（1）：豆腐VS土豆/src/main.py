@@ -1,309 +1,181 @@
 # coding=utf-8
 # author=yphacker
 
-
-import os, sys, glob, argparse
-import pandas as pd
-import numpy as np
+import gc
+import os
+import time
 from tqdm import tqdm
-
-import time, datetime
-import pdb, traceback
-
-import cv2
-# import imagehash
-from PIL import Image
-
-from sklearn.model_selection import train_test_split, StratifiedKFold, KFold
-
-from efficientnet_pytorch import EfficientNet
-# model = EfficientNet.from_pretrained('efficientnet-b4')
-
+import argparse
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split, StratifiedKFold
 import torch
-
-torch.manual_seed(0)
-torch.backends.cudnn.deterministic = False
-torch.backends.cudnn.benchmark = True
-
-import torchvision.models as models
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
-from torch.autograd import Variable
-from torch.utils.data.dataset import Dataset
+from torch.utils.data import DataLoader
+from conf import config
+from model.net import Net
+from utils.data_utils import MyDataset
+from utils.data_utils import train_transform, val_transform, test_transform
+from utils.model_utils import accuracy, FocalLoss
+from utils.utils import AverageMeter, ProgressMeter
 
-# input dataset
-train_jpg = pd.read_csv('./豆腐和土豆/train.csv', names=['id', 'label'])
-train_jpg['id'] = train_jpg['id'].apply(lambda x: './豆腐和土豆/train/' + str(x) + '.jpg')
-
-
-class QRDataset(Dataset):
-    def __init__(self, img_df, transform=None):
-        self.img_df = img_df
-        if transform is not None:
-            self.transform = transform
-        else:
-            self.transform = None
-
-    def __getitem__(self, index):
-        start_time = time.time()
-        img = Image.open(self.img_df.iloc[index]['id']).convert('RGB')
-
-        if self.transform is not None:
-            img = self.transform(img)
-        return img, torch.from_numpy(np.array(self.img_df.iloc[index]['label']))
-
-    def __len__(self):
-        return len(self.img_df)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def accuracy(output, target, topk=(1,)):
-    """Computes the accuracy over the k top predictions for the specified values of k"""
-    with torch.no_grad():
-        maxk = max(topk)
-        batch_size = target.size(0)
-
-        _, pred = output.topk(maxk, 1, True, True)
-        pred = pred.t()
-        correct = pred.eq(target.view(1, -1).expand_as(pred))
-
-        res = []
-        for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
-            res.append(correct_k.mul_(100.0 / batch_size))
-        return res
-
-
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
-
-    def __init__(self, name, fmt=':f'):
-        self.name = name
-        self.fmt = fmt
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
-    def __str__(self):
-        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
-        return fmtstr.format(**self.__dict__)
-
-
-class ProgressMeter(object):
-    def __init__(self, num_batches, *meters):
-        self.batch_fmtstr = self._get_batch_fmtstr(num_batches)
-        self.meters = meters
-        self.prefix = ""
-
-    def pr2int(self, batch):
-        entries = [self.prefix + self.batch_fmtstr.format(batch)]
-        entries += [str(meter) for meter in self.meters]
-        print('\t'.join(entries))
-
-    def _get_batch_fmtstr(self, num_batches):
-        num_digits = len(str(num_batches // 1))
-        fmt = '{:' + str(num_digits) + 'd}'
-        return '[' + fmt + '/' + fmt.format(num_batches) + ']'
-
-
-class VisitNet(nn.Module):
-    def __init__(self):
-        super(VisitNet, self).__init__()
-
-        model = models.resnet18(True)
-        model.avgpool = nn.AdaptiveAvgPool2d(1)
-        model.fc = nn.Linear(512, 2)
-        self.resnet = model
-
-    #         model = EfficientNet.from_pretrained('efficientnet-b4')
-    #         model._fc = nn.Linear(1792, 2)
-    #         self.resnet = model
-
-    def forward(self, img):
-        out = self.resnet(img)
-        return out
-
-
-def validate(val_loader, model, criterion):
-    batch_time = AverageMeter('Time', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@2', ':6.2f')
-    progress = ProgressMeter(len(val_loader), batch_time, losses, top1, top5)
-
+def evaluate(model, val_loader, criterion):
     # switch to evaluate mode
     model.eval()
-
+    data_len = 0
+    total_loss = 0
+    total_acc = 0
     with torch.no_grad():
-        end = time.time()
-        for i, (input, target) in enumerate(val_loader):
-            input = input.cuda()
-            target = target.cuda()
+        for batch_x, batch_y in val_loader:
+            batch_len = len(batch_y)
+            # batch_len = len(batch_y.size(0))
+            data_len += batch_len
+            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            probs = model(batch_x)
+            loss = criterion(probs, batch_y)
+            total_loss += loss.item()
+            _acc = accuracy(probs, batch_y)
+            total_acc += _acc[0].item() * batch_len
 
+    return total_loss / data_len, total_acc / data_len
+
+
+def train(train_data, val_data, fold_idx=None):
+    train_data = MyDataset(train_data, train_transform)
+    train_loader = DataLoader(train_data, batch_size=config.batch_size, shuffle=True)
+
+    val_data = MyDataset(val_data, val_transform)
+    val_loader = DataLoader(val_data, batch_size=config.batch_size, shuffle=False)
+
+    model = Net(model_name).to(device)
+    # criterion = nn.CrossEntropyLoss()
+    criterion = FocalLoss(0.5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.1)
+
+    if fold_idx is None:
+        print('start')
+        model_save_path = os.path.join(config.model_path, '{}.bin'.format(model_name))
+    else:
+        print('start fold: {}'.format(fold_idx + 1))
+        model_save_path = os.path.join(config.model_path, '{}_fold{}.bin'.format(model_name, fold_idx))
+    if os.path.isfile(model_save_path):
+        print('加载之前的训练模型')
+        model.load_state_dict(torch.load(model_save_path))
+
+    best_val_acc = 0
+    last_improved_epoch = 0
+    adjust_lr_num = 0
+    for cur_epoch in range(config.epochs_num):
+        start_time = int(time.time())
+        model.train()
+        print('epoch:{}, step:{}'.format(cur_epoch + 1, len(train_loader)))
+        cur_step = 0
+        for batch_x, batch_y in train_loader:
+            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+
+            optimizer.zero_grad()
+            probs = model(batch_x)
+
+            train_loss = criterion(probs, batch_y)
+            train_loss.backward()
+            optimizer.step()
+
+            cur_step += 1
+            if cur_step % config.train_print_step == 0:
+                train_acc = accuracy(probs, batch_y)
+                msg = 'the current step: {0}/{1}, train loss: {2:>5.2}, train acc: {3:>6.2%}'
+                print(msg.format(cur_step, len(train_loader), train_loss.item(), train_acc[0].item()))
+        val_loss, val_acc = evaluate(model, val_loader, criterion)
+        if val_acc >= best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), model_save_path)
+            improved_str = '*'
+            last_improved_epoch = cur_epoch
+        else:
+            improved_str = ''
+        msg = 'the current epoch: {0}/{1}, val loss: {2:>5.2}, val acc: {3:>6.2%}, cost: {4}s {5}'
+        end_time = int(time.time())
+        print(msg.format(cur_epoch + 1, config.epochs_num, val_loss, val_acc,
+                         end_time - start_time, improved_str))
+        if cur_epoch - last_improved_epoch > config.patience_epoch:
+            print("No optimization for a long time, adjust lr...")
+            scheduler.step()
+            last_improved_epoch = cur_epoch  # 加上，不然会连续更新的
+            adjust_lr_num += 1
+            if adjust_lr_num > config.adjust_lr_num:
+                print("No optimization for a long time, auto stopping...")
+                break
+    del model
+    gc.collect()
+
+
+def predict():
+    model = Net(model_name).to(device)
+    model_save_path = os.path.join(config.model_path, '{}.bin'.format(model_name))
+    model.load_state_dict(torch.load(model_save_path))
+
+    data_len = len(os.listdir(config.image_test_path))
+    test_path_list = ['{}/{}.jpg'.format(config.image_test_path, x) for x in range(0, data_len)]
+    test_data = np.array(test_path_list)
+    test_dataset = MyDataset(test_data, test_transform, 'test')
+    test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
+
+    model.eval()
+    pred_list = []
+    with torch.no_grad():
+        for batch_x, _ in tqdm(test_loader):
+            batch_x = batch_x.to(device)
             # compute output
-            output = model(input)
-            loss = criterion(output, target)
+            probs = model(batch_x)
+            preds = torch.argmax(probs, dim=1)
+            pred_list += [p.item() for p in preds]
 
-            # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 2))
-            losses.update(loss.item(), input.size(0))
-            top1.update(acc1[0], input.size(0))
-            top5.update(acc5[0], input.size(0))
+    submission = pd.DataFrame({"id": range(len(pred_list)), "label": pred_list})
+    submission.to_csv('submission.csv', index=False, header=False)
 
-            # measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
-
-        # TODO: this should also be done with the ProgressMeter
-        print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
-              .format(top1=top1, top5=top5))
-        return top1
-
-
-def predict(test_loader, model, tta=10):
-    # switch to evaluate mode
-    model.eval()
-
-    test_pred_tta = None
-    for _ in range(tta):
-        test_pred = []
-        with torch.no_grad():
-            end = time.time()
-            for i, (input, target) in enumerate(test_loader):
-                input = input.cuda()
-                target = target.cuda()
-
-                # compute output
-                output = model(input, path)
-                output = output.data.cpu().numpy()
-
-                test_pred.append(output)
-        test_pred = np.vstack(test_pred)
-
-        if test_pred_tta is None:
-            test_pred_tta = test_pred
-        else:
-            test_pred_tta += test_pred
-
-    return test_pred_tta
-
-
-def train(train_loader, model, criterion, optimizer, epoch):
-    batch_time = AverageMeter('Time', ':6.3f')
-    # data_time = AverageMeter('Data', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    # top5 = AverageMeter('Acc@5', ':6.2f')
-    progress = ProgressMeter(len(train_loader), batch_time, losses, top1)
-
-    # switch to train mode
-    model.train()
-
-    end = time.time()
-    for i, (input, target) in enumerate(train_loader):
-        input = input.cuda(non_blocking=True)
-        target = target.cuda(non_blocking=True)
-
-        # compute output
-        output = model(input)
-        loss = criterion(output, target)
-
-        # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 2))
-        losses.update(loss.item(), input.size(0))
-        top1.update(acc1[0], input.size(0))
-        # top5.update(acc5[0], input.size(0))
-
-        # compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-        if i % 100 == 0:
-            progress.pr2int(i)
-
-
-skf = KFold(n_splits=10, random_state=233, shuffle=True)
-for flod_idx, (train_idx, val_idx) in enumerate(skf.split(train_jpg, train_jpg)):
-    # print(flod_idx, train_idx, val_idx)
-
-    train_loader = torch.utils.data.DataLoader(
-        QRDataset(train_jpg.iloc[train_idx],
-                  transforms.Compose([
-                      # transforms.RandomGrayscale(),
-                      transforms.Resize((512, 512)),
-                      transforms.RandomAffine(5),
-                      # transforms.ColorJitter(hue=.05, saturation=.05),
-                      # transforms.RandomCrop((88, 88)),
-                      transforms.RandomHorizontalFlip(),
-                      transforms.RandomVerticalFlip(),
-                      transforms.ToTensor(),
-                      transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-                  ])
-                  ), batch_size=10, shuffle=True, num_workers=20, pin_memory=True
-    )
-
-    val_loader = torch.utils.data.DataLoader(
-        QRDataset(train_jpg.iloc[val_idx],
-                  transforms.Compose([
-                      transforms.Resize((512, 512)),
-                      # transforms.Resize((124, 124)),
-                      # transforms.RandomCrop((88, 88)),
-                      transforms.ToTensor(),
-                      transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-                  ])
-                  ), batch_size=10, shuffle=False, num_workers=10, pin_memory=True
-    )
-
-    model = VisitNet().cuda()
-    # model = nn.DataParallel(model).cuda()
-    criterion = nn.CrossEntropyLoss().cuda()
-    optimizer = torch.optim.SGD(model.parameters(), 0.01)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.85)
-    best_acc = 0.0
-    for epoch in range(10):
-        scheduler.step()
-        print('Epoch: ', epoch)
-
-        train(train_loader, model, criterion, optimizer, epoch)
-        val_acc = validate(val_loader, model, criterion)
-
-        if val_acc.avg.item() > best_acc:
-            best_acc = val_acc.avg.item()
-            torch.save(model.state_dict(), './resnet18_fold{0}.pt'.format(flod_idx))
 
 def main(op):
     if op == 'train':
-        train()
+        train_df = pd.read_csv('../data/train.csv')
+        print(train_df['label'].value_counts())
+        train_df['filename'] = train_df['filename'].apply(lambda x: '../data/train/{0}'.format(x) + '.jpg')
+        if mode == 1:
+            train_data, val_data = train_test_split(train_df, shuffle=True, test_size=0.1)
+            print('train:{}, val:{}'.format(train_data.shape[0], val_data.shape[0]))
+            train(train_data, val_data)
+        else:
+            n_splits = 5
+            x = train_df['filename'].values
+            y = train_df['label'].values
+            skf = StratifiedKFold(n_splits=n_splits, random_state=0, shuffle=True)
+            for fold_idx, (train_idx, val_idx) in enumerate(skf.split(x, y)):
+                train(train_df.iloc[train_idx], train_df.iloc[val_idx], fold_idx)
+    elif op == 'eval':
+        pass
     elif op == 'predict':
         predict()
-
-
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-o", "--operation", default='train', type=str, help="operation")
-    parser.add_argument("-b", "--BATCH", default=32, type=int, help="batch size")
-    parser.add_argument("-e", "--EPOCHS", default=8, type=int, help="train epochs")
+    parser.add_argument("-b", "--batch_size", default=64, type=int, help="batch size")
+    parser.add_argument("-e", "--epochs_num", default=16, type=int, help="train epochs")
+    parser.add_argument("-m", "--model_name", default='resnet', type=str, help="model select")
+    parser.add_argument("-mode", "--mode", default=1, type=int, help="train mode")
     args = parser.parse_args()
-    config.batch_size = args.BATCH
-    config.epochs_num = args.EPOCHS
-    model = model_select(args.MODEL)
+    config.batch_size = args.batch_size
+    config.epochs_num = args.epochs_num
+    model_name = args.model_name
+    mode = args.mode
+
+    torch.manual_seed(0)
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
+
     main(args.operation)
